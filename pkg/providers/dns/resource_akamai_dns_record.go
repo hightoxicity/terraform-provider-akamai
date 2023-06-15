@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -1069,6 +1070,7 @@ func resourceDNSRecordRead(ctx context.Context, d *schema.ResourceData, m interf
 			})
 		}
 	}
+
 	if e != nil {
 		// record doesn't exist
 		logger.Errorf("READ Record Not Found: %s", e.Error())
@@ -1086,9 +1088,12 @@ func resourceDNSRecordRead(ctx context.Context, d *schema.ResourceData, m interf
 			Detail:   err.Error(),
 		})
 	}
+
 	logger.Debugf("READ record data read JSON %s", string(b1))
 	rdataFieldMap := inst.Client(meta).ParseRData(ctx, recordType, record.Target) // returns map[string]interface{}
+
 	targets := inst.Client(meta).ProcessRdata(ctx, record.Target, recordType)
+
 	switch recordType {
 	case RRTypeMx:
 		// calc rdata sha from read record
@@ -2073,7 +2078,7 @@ func buildRecordsList(target []interface{}, recordType string, logger log.Interf
 			records = append(records, recContentStr)
 		case RRTypeTxt:
 			logger.Debugf("Bind TXT Data IN: [%s]", recContentStr)
-			recContentStr = strings.Trim(recContentStr, `"`)
+
 			recContentStr = txtRecordEscape(recContentStr)
 
 			logger.Debugf("Bind TXT Data %s", recContentStr)
@@ -2809,15 +2814,61 @@ func checkTlsaRecord(d *schema.ResourceData) error {
 }
 
 func txtRecordEscape(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "\"", "\\\"")
-	return "\"" + s + "\""
+	var strBuffer bytes.Buffer
+	strBuffer.WriteString("")
+
+	txtPieces := txtRecordStrFragments(s)
+	s = strings.Join(txtPieces, "")
+
+	unescapedCharsRegexp := regexp.MustCompile(`([^\\]|^)("|\\(?:[^\\";0-9]|[0-9]{1,2}[^0-9]|$))`)
+	escapedStr := unescapedCharsRegexp.ReplaceAll([]byte(s), []byte("$1\\$2"))
+
+	multipleStrRegExp := regexp.MustCompile(`(.{1,255})`)
+	matches := multipleStrRegExp.FindAllStringSubmatch(string(escapedStr[:]), -1)
+
+	for i, strMatch := range matches {
+		if i > 0 {
+			strBuffer.WriteString(" ")
+		}
+		strBuffer.WriteString("\"")
+		strBuffer.WriteString(strMatch[1])
+		strBuffer.WriteString("\"")
+	}
+
+	return strBuffer.String()
+}
+
+func txtRecordStrFragments(s string) []string {
+	var strs []string
+
+	if string(s[0]) != `"` {
+		strs = append(strs, s)
+	} else {
+		strRegExp := regexp.MustCompile(`(?:^| )"(.*?[^\\])"`)
+		matches := strRegExp.FindAllStringSubmatch(s, -1)
+
+		for _, strMatch := range matches {
+			strs = append(strs, strMatch[1])
+		}
+	}
+
+	return strs
 }
 
 func txtRecordUnescape(s string) string {
-	s = s[1 : len(s)-1]
-	s = strings.ReplaceAll(s, "\\\"", "\"")
-	return strings.ReplaceAll(s, "\\\\", "\\")
+	recordStrs := txtRecordStrFragments(s)
+
+	var strBuffer bytes.Buffer
+
+	strBuffer.WriteString("")
+
+	for _, str := range recordStrs {
+		tmpStr := strings.ReplaceAll(str, "\\\"", "\"")
+		tmpStr = strings.ReplaceAll(tmpStr, "\\\\", "\\")
+		strBuffer.WriteString(tmpStr)
+	}
+
+	return strBuffer.String()
 }
 
 func checkSvcbRecord(d *schema.ResourceData) error {
