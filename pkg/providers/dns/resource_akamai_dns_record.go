@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -104,6 +105,17 @@ func getResourceDNSRecordSchema() map[string]*schema.Schema {
 			Elem:             &schema.Schema{Type: schema.TypeString},
 			Optional:         true,
 			DiffSuppressFunc: dnsRecordTargetSuppress,
+			/*
+				StateFunc: func(val any) string {
+					logger := akamai.Log("[Akamai DNS]", "StateFunc")
+					targetVal, ok := val.(string)
+					if !ok {
+						logger.Warnf("value is of invalid type: should be string: %v", val)
+						return ""
+					}
+					return txtRecordUnescape(targetVal)
+				},
+			*/
 		},
 		"subtype": {
 			Type:     schema.TypeInt,
@@ -484,12 +496,16 @@ func diffQuotedDNSRecord(oldTargetList []string, newTargetList []string, old str
 	if old == "" {
 		baseVal = new
 		compTrim = true
-		baseVal = strings.Trim(baseVal, singleQuote)
+		if recordType != RRTypeTxt {
+			baseVal = strings.Trim(baseVal, singleQuote)
+		}
 		compList = oldTargetList
 	} else {
 		baseVal = old
-		baseVal = strings.Trim(baseVal, backslashQuote)
-		baseVal = strings.ReplaceAll(baseVal, backslashQuote, singleQuote)
+		if recordType != RRTypeTxt {
+			baseVal = strings.Trim(baseVal, backslashQuote)
+			baseVal = strings.ReplaceAll(baseVal, backslashQuote, singleQuote)
+		}
 		compList = newTargetList
 	}
 
@@ -545,6 +561,15 @@ func diffQuotedDNSRecord(oldTargetList []string, newTargetList []string, old str
 		return false
 	}
 
+	if recordType == RRTypeTxt {
+		for _, compval := range compList {
+			if txtRecordEscape(baseVal) == txtRecordEscape(compval) {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, compval := range compList {
 		if compTrim && strings.Contains(compval, backslashQuote) {
 			compval = strings.ReplaceAll(compval, backslashQuote, singleQuote)
@@ -554,6 +579,67 @@ func diffQuotedDNSRecord(oldTargetList []string, newTargetList []string, old str
 		}
 	}
 	return false
+}
+
+func txtRecordEscape(s string) string {
+	var strBuffer bytes.Buffer
+	strBuffer.WriteString("")
+
+	txtPieces := txtRecordStrFragments(s)
+	s = strings.Join(txtPieces, "")
+
+	semicolonCharsRegexp := regexp.MustCompile(`([^\\])\\;`)
+	noSemicolonEscapedStr := semicolonCharsRegexp.ReplaceAll([]byte(s), []byte("$1;"))
+
+	unescapedCharsRegexp := regexp.MustCompile(`([^\\]|^)("|\\(?:[^\\";0-9]|[0-9]{1,2}[^0-9]|$))`)
+	escapedStr := unescapedCharsRegexp.ReplaceAll([]byte(string(noSemicolonEscapedStr[:])), []byte("$1\\$2"))
+
+	multipleStrRegExp := regexp.MustCompile(`(.{1,255})`)
+	matches := multipleStrRegExp.FindAllStringSubmatch(string(escapedStr[:]), -1)
+
+	for i, strMatch := range matches {
+		if i > 0 {
+			strBuffer.WriteString(" ")
+		}
+		strBuffer.WriteString("\"")
+		strBuffer.WriteString(strMatch[1])
+		strBuffer.WriteString("\"")
+	}
+
+	return strBuffer.String()
+}
+
+func txtRecordStrFragments(s string) []string {
+	var strs []string
+
+	if string(s[0]) != `"` {
+		strs = append(strs, s)
+	} else {
+		strRegExp := regexp.MustCompile(`(?:^| )"(.*?[^\\])"`)
+		matches := strRegExp.FindAllStringSubmatch(s, -1)
+
+		for _, strMatch := range matches {
+			strs = append(strs, strMatch[1])
+		}
+	}
+
+	return strs
+}
+
+func txtRecordUnescape(s string) string {
+	recordStrs := txtRecordStrFragments(s)
+
+	var strBuffer bytes.Buffer
+
+	strBuffer.WriteString("")
+
+	for _, str := range recordStrs {
+		tmpStr := strings.ReplaceAll(str, "\\\"", "\"")
+		tmpStr = strings.ReplaceAll(tmpStr, "\\\\", "\\")
+		strBuffer.WriteString(tmpStr)
+	}
+
+	return strBuffer.String()
 }
 
 // Lock per record type
@@ -1145,7 +1231,8 @@ func resourceDNSRecordRead(ctx context.Context, d *schema.ResourceData, m interf
 		for fname, fvalue := range rdataFieldMap {
 			if fvalue, ok := fvalue.([]string); ok {
 				for i, v := range fvalue {
-					fvalue[i] = txtRecordUnescape(v)
+					//fvalue[i] = txtRecordUnescape(v)
+					fvalue[i] = v
 				}
 				if err := d.Set(fname, fvalue); err != nil {
 					return diag.Errorf("%v: %s", tf.ErrValueSet, err.Error())
@@ -2073,7 +2160,8 @@ func buildRecordsList(target []interface{}, recordType string, logger log.Interf
 			records = append(records, recContentStr)
 		case RRTypeTxt:
 			logger.Debugf("Bind TXT Data IN: [%s]", recContentStr)
-			recContentStr = strings.Trim(recContentStr, `"`)
+			//recContentStr = strings.Trim(recContentStr, `"`)
+
 			recContentStr = txtRecordEscape(recContentStr)
 
 			logger.Debugf("Bind TXT Data %s", recContentStr)
@@ -2806,18 +2894,6 @@ func checkTlsaRecord(d *schema.ResourceData) error {
 	}
 
 	return nil
-}
-
-func txtRecordEscape(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "\"", "\\\"")
-	return "\"" + s + "\""
-}
-
-func txtRecordUnescape(s string) string {
-	s = s[1 : len(s)-1]
-	s = strings.ReplaceAll(s, "\\\"", "\"")
-	return strings.ReplaceAll(s, "\\\\", "\\")
 }
 
 func checkSvcbRecord(d *schema.ResourceData) error {
