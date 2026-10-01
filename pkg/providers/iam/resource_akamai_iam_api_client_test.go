@@ -1075,12 +1075,12 @@ func TestResourceAPIClient(t *testing.T) {
 						CheckEqual("api_access.apis.0.description", "Search Data Feed").
 						CheckEqual("api_access.apis.0.documentation_url", "/").
 						CheckEqual("api_access.apis.0.endpoint", "/search-portal-data-feed-api/").
-						CheckEqual("api_access.apis.1.access_level", "READ-ONLY").
-						CheckEqual("api_access.apis.1.api_id", "6681").
-						CheckEqual("api_access.apis.1.api_name", "Test").
-						CheckEqual("api_access.apis.1.description", "Test").
-						CheckEqual("api_access.apis.1.documentation_url", "-").
-						CheckEqual("api_access.apis.1.endpoint", "/test").
+						CheckEqual("api_access.apis.1.access_level", "READ-WRITE").
+						CheckEqual("api_access.apis.1.api_id", "5801").
+						CheckEqual("api_access.apis.1.api_name", "EdgeWorkers").
+						CheckEqual("api_access.apis.1.description", "EdgeWorkers").
+						CheckEqual("api_access.apis.1.documentation_url", "https://developer.akamai.com/api/web_performance/edgeworkers/v1.html").
+						CheckEqual("api_access.apis.1.endpoint", "/edgeworkers/").
 						CheckEqual("group_access.groups.0.sub_groups.#", "1").
 						CheckEqual("group_access.groups.0.sub_groups.0.group_id", "333").
 						CheckEqual("group_access.groups.0.sub_groups.0.group_name", "group2_1").

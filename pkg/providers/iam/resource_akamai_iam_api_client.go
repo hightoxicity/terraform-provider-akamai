@@ -27,7 +27,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
+
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -38,8 +38,9 @@ import (
 )
 
 var (
-	_ resource.Resource                = &apiClientResource{}
-	_ resource.ResourceWithImportState = &apiClientResource{}
+	_ resource.Resource                 = &apiClientResource{}
+	_ resource.ResourceWithImportState  = &apiClientResource{}
+	_ resource.ResourceWithUpgradeState = &apiClientResource{}
 )
 
 type apiClientResource struct {
@@ -80,6 +81,13 @@ type (
 	}
 
 	apiAccessModel struct {
+		AllAccessibleAPIs types.Bool `tfsdk:"all_accessible_apis"`
+		APIs              types.List `tfsdk:"apis"`
+	}
+
+	// apiAccessModelV0 represents the state shape from schema version 0, where
+	// apis was a SetNestedAttribute. Used exclusively in the UpgradeState function.
+	apiAccessModelV0 struct {
 		AllAccessibleAPIs types.Bool `tfsdk:"all_accessible_apis"`
 		APIs              types.Set  `tfsdk:"apis"`
 	}
@@ -164,6 +172,7 @@ func (r *apiClientResource) Metadata(_ context.Context, _ resource.MetadataReque
 
 func (r *apiClientResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version: 1,
 		Attributes: map[string]schema.Attribute{
 			"allow_account_switch": schema.BoolAttribute{
 				Optional:    true,
@@ -374,13 +383,38 @@ func apiAccessSchema() schema.SingleNestedAttribute {
 	}
 }
 
-func apisSchema() schema.SetNestedAttribute {
-	return schema.SetNestedAttribute{
+// apiAccessSchemaV0 returns the v0 api_access schema (apis as SetNestedAttribute).
+// Used exclusively in UpgradeState to decode pre-v1 state.
+func apiAccessSchemaV0() schema.SingleNestedAttribute {
+	return schema.SingleNestedAttribute{
+		Required: true,
+		Attributes: map[string]schema.Attribute{
+			"all_accessible_apis": schema.BoolAttribute{Required: true},
+			"apis": schema.SetNestedAttribute{
+				Optional: true,
+				Computed: true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"access_level":      schema.StringAttribute{Required: true},
+						"api_id":            schema.Int64Attribute{Required: true},
+						"api_name":          schema.StringAttribute{Computed: true},
+						"description":       schema.StringAttribute{Computed: true},
+						"documentation_url": schema.StringAttribute{Computed: true},
+						"endpoint":          schema.StringAttribute{Computed: true},
+					},
+				},
+			},
+		},
+	}
+}
+
+func apisSchema() schema.ListNestedAttribute {
+	return schema.ListNestedAttribute{
 		Optional:    true,
 		Computed:    true, // When all_accessible_apis is true, full list is provided in the response from the API
-		Description: "The set of APIs the API client can access when `all_accessible_apis` is `false`.",
-		PlanModifiers: []planmodifier.Set{
-			setplanmodifier.UseStateForUnknown(),
+		Description: "The list of APIs the API client can access when `all_accessible_apis` is `false`.",
+		PlanModifiers: []planmodifier.List{
+			listplanmodifier.UseStateForUnknown(),
 		},
 		NestedObject: schema.NestedAttributeObject{
 			Attributes: map[string]schema.Attribute{
@@ -399,21 +433,33 @@ func apisSchema() schema.SetNestedAttribute {
 					Computed:    true,
 					Validators:  []validator.String{validators.NotEmptyString()},
 					Description: "A human-readable name for the API.",
+					PlanModifiers: []planmodifier.String{
+						stringplanmodifier.UseStateForUnknown(),
+					},
 				},
 				"description": schema.StringAttribute{
 					Computed:    true,
 					Validators:  []validator.String{validators.NotEmptyString()},
 					Description: "A human-readable description for the API.",
+					PlanModifiers: []planmodifier.String{
+						stringplanmodifier.UseStateForUnknown(),
+					},
 				},
 				"documentation_url": schema.StringAttribute{
 					Computed:    true,
 					Validators:  []validator.String{validators.NotEmptyString()},
 					Description: "A link to more information about the API.",
+					PlanModifiers: []planmodifier.String{
+						stringplanmodifier.UseStateForUnknown(),
+					},
 				},
 				"endpoint": schema.StringAttribute{
 					Computed:    true,
 					Validators:  []validator.String{validators.NotEmptyString()},
 					Description: "Specifies where the API can access resources.",
+					PlanModifiers: []planmodifier.String{
+						stringplanmodifier.UseStateForUnknown(),
+					},
 				},
 			},
 		},
@@ -815,7 +861,6 @@ func (r *apiClientResource) ModifyPlan(ctx context.Context, request resource.Mod
 			return
 		}
 	}
-
 	// If 'cp_codes' and `group_access.groups` are not empty, we should verify that CP codes are available for a user under these groups.
 	// Otherwise, terraform will throw `.purge_options.cp_code_access.cp_codes: element 0 has vanished.` error,
 	// because in this case cp_codes are not preserved and in the API response cp_codes field is an empty list.
@@ -848,8 +893,7 @@ func (r *apiClientResource) ModifyPlan(ctx context.Context, request resource.Mod
 		}
 	}
 
-	if request.Plan.Raw.IsNull() || request.State.Raw.IsNull() {
-		tflog.Debug(ctx, "Plan or state are null, skipping plan modification")
+	if state == nil || plan == nil {
 		return
 	}
 
@@ -902,12 +946,13 @@ func (r *apiClientResource) ModifyPlan(ctx context.Context, request resource.Mod
 		tf.IsKnown(planAPIAccess.AllAccessibleAPIs) &&
 		stateAPIAccess.AllAccessibleAPIs.ValueBool() != planAPIAccess.AllAccessibleAPIs.ValueBool() && planAPIAccess.AllAccessibleAPIs.ValueBool() {
 		tflog.Debug(ctx, "If 'all_accessible_apis' is true, we need to remove the 'apis' from the plan")
-		planAPIAccess.APIs = types.SetUnknown(apiType())
+		planAPIAccess.APIs = types.ListUnknown(apiType())
 		response.Diagnostics.Append(response.Plan.SetAttribute(ctx, path.Root("api_access"), planAPIAccess)...)
 		if response.Diagnostics.HasError() {
 			return
 		}
 	}
+
 }
 
 func checkAllowedCPCodes(cpCodes []int64, allowed []iam.ListAllowedCPCodesResponseItem) bool {
@@ -1756,6 +1801,83 @@ func (r *apiClientResource) ImportState(ctx context.Context, req resource.Import
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// UpgradeState migrates state from schema version 0 (apis as SetNestedAttribute)
+// to version 1 (apis as ListNestedAttribute). Since cty.Set and cty.List both
+// decode from a JSON array, this upgrade only needs to sort the elements by
+// api_id so that the resulting list is stable and deterministic.
+func (r *apiClientResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: {
+			PriorSchema: &schema.Schema{
+				Attributes: map[string]schema.Attribute{
+					"allow_account_switch":       schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false)},
+					"api_access":                 apiAccessSchemaV0(),
+					"authorized_users":           schema.ListAttribute{Required: true, ElementType: types.StringType},
+					"can_auto_create_credential": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false)},
+					"client_description":         schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("")},
+					"client_name":                schema.StringAttribute{Required: true},
+					"client_type":                schema.StringAttribute{Required: true},
+					"group_access":               groupAccessSchema(),
+					"ip_acl":                     ipACLSchema(),
+					"notification_emails": schema.ListAttribute{
+						ElementType: types.StringType,
+						Optional:    true,
+						Computed:    true,
+						Default:     listdefault.StaticValue(types.ListValueMust(types.StringType, []attr.Value{})),
+					},
+					"purge_options":           purgeOptionSchema(),
+					"lock":                    schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false)},
+					"access_token":            schema.StringAttribute{Computed: true, Sensitive: true},
+					"actions":                 actionsSchema(),
+					"active_credential_count": schema.Int64Attribute{Computed: true},
+					"base_url":                schema.StringAttribute{Computed: true, Sensitive: true},
+					"client_id":               schema.StringAttribute{Computed: true},
+					"created_by":              schema.StringAttribute{Computed: true},
+					"created_date":            schema.StringAttribute{Computed: true},
+					"credential":              credentialSchema(),
+					"id":                      schema.StringAttribute{Computed: true},
+				},
+			},
+			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+				var oldModel apiClientResourceModel
+				resp.Diagnostics.Append(req.State.Get(ctx, &oldModel)...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+
+				if !oldModel.APIAccess.IsNull() && !oldModel.APIAccess.IsUnknown() {
+					var oldAPIAccess apiAccessModelV0
+					resp.Diagnostics.Append(oldModel.APIAccess.As(ctx, &oldAPIAccess, basetypes.ObjectAsOptions{})...)
+					if !resp.Diagnostics.HasError() && !oldAPIAccess.APIs.IsNull() && !oldAPIAccess.APIs.IsUnknown() {
+						var elements []apiClientAPIModel
+						resp.Diagnostics.Append(oldAPIAccess.APIs.ElementsAs(ctx, &elements, false)...)
+						if !resp.Diagnostics.HasError() {
+							sort.Slice(elements, func(i, j int) bool {
+								return elements[i].APIID.ValueInt64() < elements[j].APIID.ValueInt64()
+							})
+							newAPIs, diags := types.ListValueFrom(ctx, apiType(), elements)
+							resp.Diagnostics.Append(diags...)
+							if !resp.Diagnostics.HasError() {
+								newAPIAccess := apiAccessModel{
+									AllAccessibleAPIs: oldAPIAccess.AllAccessibleAPIs,
+									APIs:              newAPIs,
+								}
+								newAPIAccessObj, diags := types.ObjectValueFrom(ctx, apiAccessType(), newAPIAccess)
+								resp.Diagnostics.Append(diags...)
+								if !resp.Diagnostics.HasError() {
+									oldModel.APIAccess = newAPIAccessObj
+								}
+							}
+						}
+					}
+				}
+
+				resp.Diagnostics.Append(resp.State.Set(ctx, &oldModel)...)
+			},
+		},
+	}
+}
+
 func isUpdateNeeded(ctx context.Context, state *tfsdk.State, plan *tfsdk.Plan) bool {
 	// Set all attributes that are modified due to plan modification logic to null
 	// to avoid unnecessary updates after comparing the state and plan.
@@ -1834,7 +1956,7 @@ func (m *apiClientResourceModel) apisFromModel(ctx context.Context) ([]iam.APIRe
 	return apis, false, nil
 }
 
-func apisSetElementsAreKnown(ctx context.Context, apiElements types.Set) (bool, diag.Diagnostics) {
+func apisSetElementsAreKnown(ctx context.Context, apiElements types.List) (bool, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	for _, v := range apiElements.Elements() {
 		if v.IsUnknown() {
@@ -2195,7 +2317,10 @@ func (m *apiClientResourceModel) setData(ctx context.Context, getResponse *iam.G
 			Endpoint:         types.StringValue(api.Endpoint),
 		})
 	}
-	apisObject, diags := types.SetValueFrom(ctx, apiType(), apis)
+	sort.Slice(apis, func(i, j int) bool {
+		return apis[i].APIID.ValueInt64() < apis[j].APIID.ValueInt64()
+	})
+	apisObject, diags := types.ListValueFrom(ctx, apiType(), apis)
 	if diags.HasError() {
 		return diags
 	}

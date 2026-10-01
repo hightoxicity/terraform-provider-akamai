@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/akamai/AkamaiOPEN-edgegrid-golang/v14/pkg/iam"
@@ -145,9 +146,9 @@ func (d *apiClientDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 						Computed:    true,
 						Description: "Whether the API client has access to a full set of available APIs.",
 					},
-					"apis": schema.SetNestedAttribute{
+					"apis": schema.ListNestedAttribute{
 						Computed:    true,
-						Description: "The set of APIs the API client can access when `all_accessible_apis` is disabled.",
+						Description: "The list of APIs the API client can access when `all_accessible_apis` is disabled.",
 						NestedObject: schema.NestedAttributeObject{
 							Attributes: map[string]schema.Attribute{
 								"access_level": schema.StringAttribute{
@@ -429,7 +430,10 @@ func (m *clientModel) read(ctx context.Context, res *iam.GetAPIClientResponse) d
 			Endpoint:         types.StringValue(api.Endpoint),
 		})
 	}
-	apisObject, diags := types.SetValueFrom(ctx, apiType(), apis)
+	sort.Slice(apis, func(i, j int) bool {
+		return apis[i].APIID.ValueInt64() < apis[j].APIID.ValueInt64()
+	})
+	apisObject, diags := types.ListValueFrom(ctx, apiType(), apis)
 	if diags.HasError() {
 		return diags
 	}

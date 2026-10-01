@@ -29,9 +29,9 @@ resource "akamai_iam_api_client" "test" {
     enable = true
     cidr   = ["128.5.6.5/24"]
   }
-  api_access = {
+  api_access = random_integer.apis_choice.result == 1 ? {
     all_accessible_apis = false
-    apis = random_integer.apis_choice.result == 1 ? [
+    apis = [
       {
         api_id       = 5580
         access_level = "READ-ONLY"
@@ -40,7 +40,10 @@ resource "akamai_iam_api_client" "test" {
         api_id       = 5801
         access_level = "READ-WRITE"
       }
-      ] : [
+    ]
+    } : {
+    all_accessible_apis = false
+    apis = [
       {
         api_id       = 5580
         access_level = "READ-ONLY"
