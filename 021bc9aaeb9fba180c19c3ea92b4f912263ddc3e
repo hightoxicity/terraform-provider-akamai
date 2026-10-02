@@ -1,0 +1,26 @@
+pkg/providers/iam/resource_akamai_iam_api_client.go
+  c234af2 862:1fd05394,862:03dfe2d3,863:7187f067,864:d10b36aa,865:00000000
+  DELETED 9157504 830:aea94ecd,831:db08d155,832:e100ec2a,833:98b5d5cf,834:b43d129d,835:258287e7,836:2b7b98a7,837:d79e1f25,838:1439f4d6,839:77c26c4a,840:d10b36aa,841:160aa84c,842:4a166cfb,843:8f31587c,844:2ea10ada,845:2c58b0f2,846:ca6b720e,847:f03544ac,848:92025bd8,849:4608fd67,850:e1c4bdc3,851:331e5df8,852:d10b36aa,853:6e2e94df,854:514a37be,855:5c957670,856:743cb75f,857:8f8fb65e,858:2fbb5299,859:99e698c3,860:d10b36aa,861:d10b36aa,862:00000000,863:f4defe21,864:1e968208,865:b51377fb,866:04513ea5,867:26b2f6d5,868:ae34e23f,869:fbf8d99c,870:f4112016,871:d10b36aa,872:d10b36aa,873:00000000,874:fc8f1d02,875:07d7cc2c,876:2f97f461,877:f13017ee,878:f3288ec5,879:6d516c8b,880:7187f067,881:d10b36aa,882:d10b36aa,883:d10b36aa,884:d10b36aa,885:d10b36aa,886:d10b36aa,887:d10b36aa,888:d10b36aa,889:00000000
+  DELETED c234af2 862:1fd05394
+---
+{
+  "schema_version": "authorship/1.0.0",
+  "aidev_track_version": "1.0.0",
+  "base_commit_sha": "255e3f2f3281a232957629a2a96165c6166311be",
+  "prompts": {
+    "9157504": {
+      "agent_id": {
+        "tool": "claude-code",
+        "id": "0ce2f3c2-7b3a-4751-9048-0b91fa472b4d",
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    "c234af2": {
+      "agent_id": {
+        "tool": "claude-code",
+        "id": "0ce2f3c2-7b3a-4751-9048-0b91fa472b4d",
+        "model": "claude-sonnet-4-6"
+      }
+    }
+  }
+}
